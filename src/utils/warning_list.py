@@ -21,6 +21,7 @@ except ImportError:
         from fuzzywuzzy import fuzz  # type: ignore[import-untyped,reportMissingImports]
     except ImportError:
         fuzz = None
+FUZZY_THRESHOLD = 80
 
 SORT_FIELDS = {
     "Similarity": "similarity",
@@ -103,7 +104,7 @@ def filter_warnings(
             score_a = max(fuzz.partial_ratio(query, doc_a), fuzz.token_set_ratio(query, doc_a))
             score_b = max(fuzz.partial_ratio(query, doc_b), fuzz.token_set_ratio(query, doc_b))
 
-            if score_a >= fuzzy_threshold or score_b >= fuzzy_threshold:
+            if score_a >= FUZZY_THRESHOLD or score_b >= FUZZY_THRESHOLD:
                 filtered.append(item)
 
     return filtered
@@ -212,6 +213,51 @@ def _has_exact_match(doc_a: str, doc_b: str) -> bool:
 
     return not norm_a.isdisjoint(norm_b)
 
+def render_compact_warning_row(flag: Mapping[str, Any]) -> None:
+    """
+    Render warning in compact single-line format.
+    """
+
+    doc_a = flag["doc_a"]
+    doc_b = flag["doc_b"]
+
+    tier = tier_from_severity_label(flag["severity"])
+    similarity = flag["similarity"] * 100
+
+    col1, col2, col3, col4 = st.columns([5, 1, 1, 0.5])
+
+    with col1:
+        exact_badge = ""
+
+        if _has_exact_match(doc_a, doc_b):
+            exact_badge = (
+                " <span style='color:#2E7D32;font-weight:bold;'>✓ Exact</span>"
+            )
+
+        st.markdown(
+            f"📄 **{doc_a}** ↔ **{doc_b}**{exact_badge}",
+            unsafe_allow_html=True,
+        )
+
+    with col2:
+        st.markdown(
+            f"**{similarity:.1f}%**"
+        )
+
+    with col3:
+        st.markdown(
+            badge_html(tier, flag["severity"]),
+            unsafe_allow_html=True,
+        )
+
+    with col4:
+        if st.button(
+            "❌",
+            key=f"compact_dismiss_{doc_a}_{doc_b}",
+            help="Dismiss warning",
+        ):
+            add_false_positive(doc_a, doc_b)
+            st.rerun()
 
 def render_warning_controls(
     flags: Sequence[Mapping[str, Any]],
@@ -221,6 +267,8 @@ def render_warning_controls(
 ) -> None:
     if "warning_page" not in st.session_state:
         st.session_state.warning_page = 1
+    if "compact_view" not in st.session_state:
+        st.session_state.compact_view = False
 
     from src.core.config import DEFAULT_THRESHOLDS
 
@@ -236,12 +284,12 @@ def render_warning_controls(
             }
         )
 
-    if st.session_state.get("hide_low_severity", False):
+    if st.session_state.get("compact_view", False):
         active_filters.append(
             {
-                "key": "clear_hide_low_severity",
-                "label": "Severity: Medium+ ⓧ",
-                "action": "hide_low_severity",
+                "key": "clear_compact_view",
+                "label": "Compact View ⓧ",
+                "action": "compact_view",
             }
         )
 
@@ -334,6 +382,8 @@ def render_warning_controls(
                         st.session_state.class_filter_selectbox = "All Classes"
                     elif f["action"] == "min_match_length":
                         st.session_state.warning_min_match_length = 0
+                    elif f["action"] == "compact_view":
+                        st.session_state.compact_view = False
                     st.rerun()
 
     dismissed_pairs = get_false_positives()
@@ -347,7 +397,7 @@ def render_warning_controls(
         st.success("✅ No suspicious pairs found above the current threshold.")
         return
 
-    search_col, toggle_col, size_col = st.columns([3, 2, 1])
+    search_col, toggle_col, compact_col, size_col = st.columns([3, 2, 2, 1])
 
     with search_col:
         search_query = st.text_input(
@@ -362,7 +412,13 @@ def render_warning_controls(
             "Hide Low Severity",
             key="hide_low_severity",
         )
-
+    with compact_col:
+        compact_view = st.checkbox(
+            "Compact View",
+            key="compact_view",
+            help="Show warnings as compact single-line rows",
+            on_change=_reset_page,
+        )
     with size_col:
         page_size = st.selectbox(
             "Warnings per page",
@@ -566,8 +622,19 @@ def render_warning_controls(
     # with a transition so re-filtered/re-sorted results animate smoothly
     # instead of snapping instantly.
     with st.container(key="warning_list_container"):
-        for flag in current_page.items:
+
+      for flag in current_page.items:
+
+        if compact_view:
+            render_compact_warning_row(flag)
+            st.markdown(
+                 "<hr style='margin:4px 0;border:0;border-top:1px solid #eee;'>",
+                 unsafe_allow_html=True,
+            )
+
+        else:
             tier = tier_from_severity_label(flag["severity"])
+
             with st.container(border=True):
                 c1, c2, c3 = st.columns([3, 1, 1])
                 with c1:
